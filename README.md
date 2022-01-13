@@ -1,5 +1,7 @@
 # LHCb Code Workspace Template
 
+[![Open in Coder](https://cdn.coder.com/embed-button.svg)](https://code.wh0a.com/wac/build?template_oauth_service=github&template_url=https://github.com/donPabloNow/lb-workspace-template&template_ref=main&template_filepath=.coder/template.code-workspace)
+
 ## Get started
 
 First, choose and `cd` into a directory where your stack will reside,
