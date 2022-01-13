@@ -1,0 +1,7 @@
+Host lxplus.cern.ch
+    GSSAPITrustDNS yes
+
+Host *
+    AddressFamily inet
+    GSSAPIAuthentication yes
+    StrictHostKeyChecking yes

@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+import os
+import sys
+import pwd
+import grp
+import optparse
+import itertools
+import logging
+from subprocess import Popen, call, check_output, STDOUT, CalledProcessError
+
+PROGRAM_NAME = 'lb-docker-run'
+version = 2
+DEFAULT_TAG = 'v4'  # must be kept in sync with .github-ci.yml
+
+DEFAULT_PLATFORM = (os.environ.get('CMTCONFIG') or os.environ.get('BINARY_TAG')
+                    or 'x86_64-centos7-gcc7-opt')
+
+# list of option, constant, help, message for allowed LHCb environment modes
+LBENV_MODES = ([
+    ('--%s' % opt, value.lower(), 'Enable new LHCb environment (%s)' % value,
+     'using %s' % value)
+    for opt, value in (('lbenv', 'LbEnv-stable'),
+                       ('lbenv-stable', 'LbEnv-stable'),
+                       ('lbenv-testing', 'LbEnv-testing'),
+                       ('lbenv-dev', 'LbEnv-testing'),
+                       ('lbenv-unstable', 'LbEnv-unstable'))
+] + [
+    ('--lblogin', 'lblogin', 'Enable LHCb environment (default)',
+     'using LbLogin'),
+    ('--lblogin-dev', 'lblogin-dev', 'Enable LHCb environment (dev version)',
+     'using LbLoginDev'),
+] + [('--no-%s' % opt, 'none', 'Do not enable LHCb environment',
+      'disable LHCb environment') for opt in ('lbenv', 'lblogin')])
+
+
+def cvmfs_on_autofs():
+    if sys.platform == 'darwin':
+        # no autofs on MacOS
+        return False
+    for l in check_output(['mount']).splitlines():
+        if b'/cvmfs type autofs' in l:
+            return True
+    return False
+
+
+parser = optparse.OptionParser(
+    prog=PROGRAM_NAME, usage='%prog [options] [command]')
+parser.disable_interspersed_args()
+parser.add_option(
+    '--version',
+    action='store_true',
+    help="Print version information and quit")
+parser.add_option(
+    '--centos7',
+    action='store_const',
+    const='centos7',
+    dest='os',
+    help="Run an centos7 container")
+parser.add_option(
+    '--slc5',
+    action='store_const',
+    const='slc5',
+    dest='os',
+    help="Run an slc5 container")
+parser.add_option(
+    '--slc6',
+    action='store_const',
+    const='slc6',
+    dest='os',
+    help="Run an slc6 container, default one")
+parser.add_option('-c', '--platform', help='runtime platform')
+
+docker_opts = optparse.OptionGroup(parser, 'Options for "docker run"')
+docker_opts.add_option(
+    '-e', '--env', action='append', help="Set environment variables")
+docker_opts.add_option(
+    '-p',
+    '--publish',
+    action='append',
+    dest='port',
+    help="Publish a container's port(s) to the host")
+docker_opts.add_option(
+    '-u',
+    '--user',
+    action='store',
+    help="Username or UID (format: <name|uid>[:<group|gid>])")
+docker_opts.add_option(
+    '--no-map-user',
+    action='store_true',
+    help="Do not map host user id to container user")
+docker_opts.add_option(
+    '-v', '--volume', action='append', help="Bind mount a volume")
+docker_opts.add_option(
+    '-w',
+    '--workdir',
+    action='store',
+    help="Working directory inside the container")
+docker_opts.add_option('--name', help="Assign a name to the container")
+docker_opts.add_option(
+    '--hostname', action='store_true', help="Container host name")
+docker_opts.add_option(
+    '--dns', action='append', dest='dns', help="Set custom DNS servera")
+docker_opts.add_option(
+    '--privileged',
+    action='store_true',
+    help="Give extended privileges to this container")
+docker_opts.add_option('--network', help="Connect a container to a network")
+parser.add_option_group(docker_opts)
+
+log_opts = optparse.OptionGroup(parser, 'Verbosity settings')
+log_opts.add_option(
+    '-q',
+    '--quiet',
+    dest='level',
+    action='store_const',
+    const=logging.ERROR,
+    help='print only for errors')
+log_opts.add_option(
+    '--verbose',
+    dest='level',
+    action='store_const',
+    const=logging.INFO,
+    help='a bit more verbose')
+log_opts.add_option(
+    '--debug',
+    dest='level',
+    action='store_const',
+    const=logging.DEBUG,
+    help='print everything')
+log_opts.add_option(
+    '--quiet-env', action='store_true', help='prevent LHCb environment banner')
+parser.add_option_group(log_opts)
+
+parser.add_option(
+    '--force-cvmfs',
+    action='store_true',
+    help="Mount cvmfs in the container even if available on the host")
+parser.add_option('--no-cvmfs', action='store_true', help="Do not use cvmfs")
+parser.add_option(
+    '--home',
+    action='store_true',
+    dest='home',
+    help="Set a persistent home for this image")
+parser.add_option(
+    '--kerberos',
+    action='store_true',
+    dest='kerberos',
+    help="Forward the kerberos ticket to the container")
+parser.add_option(
+    '--interactive',
+    action='store_true',
+    dest='interactive',
+    help="Give an interactive shell to this container")
+parser.add_option(
+    '--no-interactive',
+    action='store_false',
+    dest='interactive',
+    help="Do not give an interactive shell to this container")
+parser.add_option(
+    '--tty',
+    action='store_true',
+    dest='tty',
+    help="Allocate a pseudo-TTY with --interactive")
+parser.add_option(
+    '--no-tty',
+    action='store_false',
+    dest='tty',
+    help="Do not allocate a pseudo-TTY with --interactive")
+parser.add_option(
+    '--no-remove',
+    action='store_false',
+    dest='remove',
+    help="Do not remove the container on exit")
+
+for o, c, h, _ in LBENV_MODES:
+    parser.add_option(
+        o, action='store_const', dest='lhcb_env', const=c, help=h)
+
+parser.add_option(
+    '--ssh-agent',
+    action='store_true',
+    dest='sshAgent',
+    help="Forward host ssh-agent to the container")
+parser.add_option(
+    '--update',
+    action='store_true',
+    dest='update',
+    help="Update the docker image if a newer is available")
+parser.add_option(
+    '-C',
+    '--directory',
+    help='Directory to share with the '
+    'container as workspace [default: current directory]')
+parser.add_option(
+    '--use-absolute-path',
+    action='store_true',
+    dest='absolutePath',
+    help="Mount the workspace directory with the same absolute path as on host"
+    " (by default is mounted as /workspace)")
+parser.add_option(
+    '--ptrace',
+    action='store_true',
+    help="Allow --gdb to work inside container by allowing ptrace")
+parser.add_option(
+    '--wrap',
+    action='store_true',
+    help='Use %prog as transparent wrapper for command (setting '
+    'some predefined options),this is the default if %prog is '
+    'the target of a symlink')
+parser.add_option(
+    '--docker-prefix', help='Docker registry prefix for the images')
+parser.add_option('--docker-tag', help='Docker image to use')
+
+parser.set_defaults(
+    lhcb_env=None,
+    interactive=True,
+    # tty's default is set based on opts.interactive
+    remove=True,
+    env=[],
+    port=[],
+    volume=[],
+    dns=[],
+    level=logging.WARNING,
+    directory=os.getcwd(),
+    docker_prefix='github-registry.cern.ch/lhcb-core/lbdocker',
+    docker_tag=DEFAULT_TAG)
+
+# check if we are called directly or via a symlink
+if os.path.basename(sys.argv[0]) == PROGRAM_NAME:
+    argv = sys.argv[1:]
+else:  # are target of a symlink
+    argv = ['--wrap', os.path.basename(sys.argv[0])] + \
+        sys.argv[1:]
+
+opts, args = parser.parse_args(args=argv)
+logging.basicConfig(level=opts.level)
+
+# tty's default is set based on opts.interactive
+if opts.tty is None:
+    opts.tty = opts.interactive
+
+if opts.wrap:
+    logging.debug('enabling wrapper mode')
+    opts.interactive = False
+    opts.tty = False
+    opts.remove = True
+    opts.network = 'host'
+    opts.absolutePath = True
+    opts.home = True
+    opts.directory = os.environ.get('WORKSPACE') or os.environ['HOME']
+    opts.workdir = os.getcwd()
+    opts.quiet_env = True
+    opts.platform = opts.platform or DEFAULT_PLATFORM
+    if 'CMAKE_PREFIX_PATH' in os.environ:
+        opts.env.append('CMAKE_PREFIX_PATH')
+    if 'CCACHE_DIR' in os.environ:
+        opts.env.append('CCACHE_DIR')
+        if not os.environ['CCACHE_DIR'].startswith(opts.directory):
+            # the CCACHE_DIR is not in the exposed directory so we mount it
+            opts.volume.append(os.environ['CCACHE_DIR'])
+
+if opts.version:
+    print('lb-docker-run:\n  version: {0}\n  image-tag: {1}'.format(
+        version, DEFAULT_TAG))
+    exit()
+
+try:
+    logging.debug(check_output(['docker', '--version'], stderr=STDOUT).strip())
+except CalledProcessError:
+    exit('Please, be sure you have correctly installed Docker')
+
+if opts.force_cvmfs and opts.no_cvmfs:
+    parser.error('conflicting options --force-cvmfs and --no-cvmfs')
+
+if opts.user and opts.no_map_user:
+    parser.error('conflicting options --user and --no-map-user')
+
+if not opts.interactive and opts.tty:
+    parser.error('conflicting options --no-interactive and --tty')
+
+if not opts.platform and not opts.os:
+    opts.os = platform_os = DEFAULT_PLATFORM.split('-')[1]
+    opts.platform = DEFAULT_PLATFORM
+elif opts.platform:
+    platform_os = opts.platform.split('-')[1]
+    opts.os = opts.os or platform_os
+else:
+    platform_os = opts.os
+
+if opts.os != platform_os:
+    logging.warning('using platform id %s on OS %s', opts.platform, opts.os)
+
+if not opts.force_cvmfs and not opts.no_cvmfs and os.path.exists(
+        '/cvmfs/lhcb.cern.ch/lib'):
+    logging.debug('bind mount host /cvmfs')
+    if cvmfs_on_autofs():
+        opts.volume.append('/cvmfs:/cvmfs:shared')
+    else:
+        opts.volume.append('/cvmfs:/cvmfs:cached,ro')
+else:
+    opts.force_cvmfs = not opts.no_cvmfs
+
+if opts.force_cvmfs:
+    logging.debug('mounting /cvmfs in container')
+    if not opts.privileged:
+        logging.warning('requested to mount /cvmfs in container, '
+                        'forcing --privileged')
+        opts.privileged = True
+
+if opts.no_cvmfs:
+    logging.debug('no access to /cvmfs')
+    opts.env.append('NO_CVMFS=1')
+    if opts.lhcb_env != 'none':
+        logging.warning('--no-cvmfs implies --no-lblogin/--no-lbenv')
+        opts.lhcb_env = 'none'
+
+opts.lhcb_env = opts.lhcb_env or 'lblogin'
+opts.env.append('LHCB_ENV_MODE=' + opts.lhcb_env)
+logging.debug(dict((c, m) for _, c, _, m in LBENV_MODES)[opts.lhcb_env])
+
+workspace_source = os.path.abspath(opts.directory)
+workspace_target = workspace_source if opts.absolutePath else '/workspace'
+opts.workdir = opts.workdir or workspace_target
+logging.debug('mounting host %s as container %s', workspace_source,
+              workspace_target)
+opts.volume.append('{0}:{1}:Z'.format(workspace_source, workspace_target))
+
+if opts.home:
+    homedir = os.getenv('HOME') + '/.local/docker/' + opts.os + '-build-home/'
+    logging.debug('using persistent home directory (%s)', homedir)
+    if not os.path.exists(homedir):
+        logging.debug('creating %s', homedir)
+        os.makedirs(homedir)
+    opts.volume.append(homedir + ':/userhome')
+
+if opts.sshAgent:
+    if 'SSH_AUTH_SOCK' in os.environ:
+        logging.debug('sharing ssh-agent with container')
+        opts.volume.append(os.environ['SSH_AUTH_SOCK'])
+        opts.env.append('SSH_AUTH_SOCK')
+    else:
+        logging.warning('ssh-agent not available, cannot be propagated')
+
+if opts.kerberos:
+    logging.debug('sharing kerberos tokens with container')
+    krb5ccname = os.environ.get('KRB5CCNAME', '').split(':')[-1]
+    if os.path.isfile(krb5ccname):
+        opts.env.append('KRB5CCNAME')
+        opts.volume.append(krb5ccname)
+    else:
+        sys.exit('the --kerberos flag requires KRB5CCNAME to point to a file')
+
+if not opts.user and not opts.no_map_user:
+    if not sys.platform == 'darwin':
+        logging.debug('using current user name and id in the container')
+        opts.env.extend([
+            'USER=' + pwd.getpwuid(os.getuid()).pw_name,
+            'GROUP=' + grp.getgrgid(os.getgid()).gr_name
+        ])
+        opts.user = '{0}:{1}'.format(os.getuid(), os.getgid())
+    else:
+        opts.user = '1000'
+
+concat = itertools.chain.from_iterable
+
+image_name = '{0}/{1}-build:{2}'.format(opts.docker_prefix, opts.os,
+                                        opts.docker_tag)
+
+docker_opts = [
+    (True, ['docker', 'run']),
+    (opts.remove, ['--rm']),
+    (opts.interactive, ['-i']),
+    (opts.interactive and opts.tty, ['-t']),
+    (opts.privileged, ['--privileged']),
+    (opts.name, ['--name', opts.name]),
+    (opts.volume, concat(['-v', v if ':' in v else '{0}:{0}'.format(v)]
+                          for v in opts.volume)),
+    (opts.hostname, [opts.hostname]),
+    (opts.workdir, [
+        '-w', opts.workdir,
+        '-e', 'LBENV_CURRENT_WORKSPACE={0}'.format(opts.workdir)]),
+    (opts.port, concat(['-p', p] for p in opts.port)),
+    (opts.dns, concat(['--dns', d] for d in opts.dns)),
+    (opts.network, ['--network', opts.network]),
+    (opts.user, ['-u', opts.user]),
+    (opts.env, concat(['-e', e] for e in opts.env)),
+    (opts.quiet_env, ['-e', 'QUIET_LBLOGIN=1']),
+    (opts.platform, ['-e', 'CMTCONFIG={0}'.format(opts.platform)]),
+    (opts.ptrace, ['--cap-add=SYS_PTRACE', '--security-opt', 'seccomp=unconfined']),
+    (True, [image_name]),
+    (True, args)
+]  # yapf: disable
+cmd = list(concat(o for f, o in docker_opts if f))
+
+if opts.update:
+    logging.debug('updating docker image')
+    call(['docker', 'pull', image_name])
+
+logging.debug('calling ' + ' '.join("'{}'".format(c) for c in cmd))
+sys.exit(Popen(cmd).wait())

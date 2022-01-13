@@ -1,0 +1,145 @@
+#!/bin/bash
+set -eo pipefail
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+source "$DIR/helpers.sh"
+logname="build-env"
+eval $(config --sh outputPath binaryTag useDocker useDistcc lbenvPath lcgVersion localPoolDepth projectPath forwardEnv)
+
+OUTPUT="$outputPath"
+BINARY_TAG="$binaryTag"
+USE_DOCKER="$useDocker"
+USE_DISTCC="$useDistcc"
+setup_output
+
+CHECK_KERBEROS=false
+if [ "$1" = "--check-kerberos" ]; then
+    shift
+    CHECK_KERBEROS=true
+elif [ "$USE_DISTCC" = true ]; then
+    CHECK_KERBEROS=true
+fi
+
+# Expand any variables in the command to run (e.g. $BINARY_TAG from run-env)
+cmd=$(eval echo "$1")
+cmd=${cmd:-printenv}  # if no command is given, print environment
+shift
+
+if [ "$USE_DOCKER" != true ]; then
+    # If using a native build, just check the OS
+    HOST_OS=$(/cvmfs/lhcb.cern.ch/lib/bin/host_os)
+    if [ "$HOST_OS" != x86_64-centos7 ]; then
+        log ERROR "Host OS $HOST_OS is not supported. Find a CentOS 7 machine"
+        log ERROR "or use docker by setting \"useDocker\" to true in ${DIR}/config.json"
+        exit 1
+    fi
+fi
+
+if [ "$USE_DOCKER" = true ]; then
+    # If using docker, we should obtain a tgt in a FILE: cache
+    # and export KRB5CCNAME so that lb-docker-run can get it.
+    # TODO is there a way to forward a tgt from types other than FILE, e.g KCM?
+    export KRB5CCNAME=$(klist 2>/dev/null | head -1 | grep -o 'FILE:.*')
+fi
+
+if [ "$CHECK_KERBEROS" = true ]; then
+    # Strictly require kerberos only if using distcc
+    LEVEL=WARNING
+    if [ "$USE_DISTCC" = true ]; then
+        LEVEL=ERROR
+        may_exit="exit 1"
+    fi
+
+    if [ "$USE_DOCKER" = true ]; then
+        if [ -z "$KRB5CCNAME" ]; then
+            log $LEVEL "No kerberos ticket cache of the form 'FILE:path/to/file' was found."
+            log $LEVEL "Please do this to forward a kerberos ticket to the conainer:"
+            log $LEVEL
+            log $LEVEL "    export KRB5CCNAME='FILE:/tmp/krb5cc_$(id -u)'; kinit -r 7d <username>@CERN.CH"
+            log $LEVEL
+            $may_exit
+        fi
+    fi
+
+    # Check for a valid ticket
+    klist -l | grep -q "@CERN\.CH" & klist_pid=$!  # run klist -s and klist -l in parallel
+    if ! { klist -s && wait $klist_pid; }; then
+        log $LEVEL "No valid ticket found. Please get a new one with"
+        log $LEVEL
+        log $LEVEL "    kinit -r 7d <username>@CERN.CH"
+        log $LEVEL
+        $may_exit
+    elif [ -z "$(find "$OUTPUT/krb_renewal.timestamp" -mmin -30 2>/dev/null)" ]; then
+        # Try to renew ticket every 30 min
+        touch "$OUTPUT/krb_renewal.timestamp"
+        kinit -R 2>/dev/null || true  # if this fails, the ticket is not renewable
+    fi
+fi
+
+vars=(
+    # TODO move some of these to make.sh as only needed for building and not running?
+    "LCG_VERSION=$lcgVersion"
+    "LBENV_CURRENT_WORKSPACE=$projectPath"
+    "LOCAL_POOL_DEPTH=$localPoolDepth"
+)
+test -z ${MAKEFLAGS+x} || vars+=("MAKEFLAGS=${MAKEFLAGS}")
+# Propagate variables listed explicitly in forwardEnv
+for var in "${forwardEnv[@]}"; do
+    test -z ${!var+x} || vars+=("$var=${!var}")
+done
+
+# CMAKE_PREFIX_PATH is handled in make.sh!
+# If we set it here, LbEnv (native or Docker) would prepend the usual prefixes.
+# This limits how we can customise CMake, e.g. it is not possible to override
+# the LbDevTools toolchain.
+
+if [ "$USE_DOCKER" = true ]; then
+    ( cd "${DIR}"; python3 -c 'import setup; setup.assert_cvmfs()' )
+    args=(
+        --docker-tag v4.57
+        --quiet-env --lbenv -c ${BINARY_TAG}
+        -C "${DIR}/.." --use-absolute-path
+        --workdir "$PWD"
+    )
+    for var in "${vars[@]}"; do
+        args+=(-e "$var")
+    done
+    # if KRB5CCNAME is empty, don't try to forward the kerberos token
+    test -z ${KRB5CCNAME} || args+=(--kerberos)
+    "${DIR}/lb-docker-run" "${args[@]}" ${LB_DOCKER_RUN_FLAGS} "$cmd" "$@"
+    # TODO lbenvPath is not respected in the docker case
+else
+    # Start a clean LbEnv similarly to lb-docker-run.
+    # `host_vars` (and nothing else) are set before sourcing LbEnv.
+    # The resulting environment is cached and reused in subsequent runs.
+    # The variables in `vars` are only set within the LbEnv environment
+    # and are not cached.
+    host_vars=(
+        "HOSTNAME=${HOSTNAME}"
+        "HOME=${HOME}"
+        "USER=${USER}"
+        "TERM=${TERM}"
+    )
+    vars+=( "BINARY_TAG=${BINARY_TAG}" )
+    test -z ${KRB5CCNAME} || vars+=("KRB5CCNAME=${KRB5CCNAME}")
+    test -z ${TMPDIR} || vars+=("TMPDIR=${TMPDIR}")
+    test -z ${XDG_RUNTIME_DIR} || vars+=("XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}")
+
+    cache_key=$(
+        {
+            echo "${host_vars[@]}" ${lbenvPath} ;
+            cat "${DIR}/native-env.sh" "${DIR}/build-env" ;
+        } | cksum
+    )
+    cache="${OUTPUT}/lbenv-cache-${cache_key// /-}.env"
+    if [[ !( -f "$cache" ) ]]; then
+        log INFO "Recreating environment cache: ${cache}"
+        if ! env -i "${host_vars[@]}" bash "${DIR}/native-env.sh" "$lbenvPath" > "$cache"; then
+            log ERROR "Check 'lbenvPath' configuration setting"
+            rm -f "$cache"
+            exit 1
+        fi
+    else
+        log DEBUG "Using environment cache: ${cache}"
+    fi
+    exec env -i $(<$cache) env "${vars[@]}" "$cmd" "$@"
+fi

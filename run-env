@@ -1,0 +1,17 @@
+#!/bin/bash
+set -eo pipefail
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+
+# Find the project, i.e. the first option not starting with a dash
+for iproject in $(seq 1 $#); do
+    if [[ "${!iproject}" != -* ]]; then
+        break
+    fi
+done
+
+PROJECT="${!iproject}"
+export LB_DOCKER_RUN_FLAGS="--ptrace ${@:1:$iproject-1}"
+# Check kerberos token as we're most likely going to access data.
+# Note that ${BINARY_TAG} is expanded in build-env.
+exec "${DIR}/build-env" --check-kerberos ${PROJECT}/build.\${BINARY_TAG}/run "${@:$iproject+1}"

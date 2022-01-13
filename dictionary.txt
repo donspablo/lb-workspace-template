@@ -1,0 +1,15 @@
+lhcb
+gaudi
+gaudirun
+numa
+numactl
+configurable
+configurables
+velo
+selreports
+distcc
+klist
+noqa
+centos
+cvmfs
+lhcbdev

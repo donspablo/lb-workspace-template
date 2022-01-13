@@ -1,0 +1,71 @@
+{
+	"binaryTag": "x86_64_v2-centos7-gcc11-opt",
+	"defaultProjects": [
+		"Alignment",
+		"Brunel",
+		"Moore"
+	],
+	"extraDependencies": {},
+	"gitBranch": {
+		"Gaudi": "master",
+		"default": "master",
+		"defaultDataPackages": "master"
+	},
+	"lcgVersion": "101",
+	"cmakePrefixPath": "$CMAKE_PREFIX_PATH:/cvmfs/sft.cern.ch/lcg/releases",
+	"cmakeFlags": {
+		"default": "-Wno-dev",
+		"Allen": "-DSTANDALONE=OFF",
+		"Gaussino": "-DPKG_CONFIG_USE_CMAKE_PREFIX_PATH=ON -DLCG_LAYER=LHCB_5 -DLCG_USE_GENERATORS=ON",
+		"Gauss": "-DLCG_LAYER=LHCB_5 -DLCG_USE_GENERATORS=ON"
+	},
+	"forwardEnv": [
+		"DISPLAY",
+		"SSH_AUTH_SOCK",
+		"SSH_AGENT_PID",
+		"GITCONDDBPATH"
+	],
+	"gitGroup": {
+		"Gaudi": "gaudi",
+		"Gaussino": "Gaussino",
+		"default": "lhcb",
+		"defaultDataPackages": "lhcb-datapkg"
+	},
+	"gitBase": null,
+	"gitUrl": {
+		"DD4hep": "https://github.com/AIDASoft/DD4hep.git"
+	},
+	"dataPackages": [
+		"DBASE/AppConfig",
+		"DBASE/PRConfig",
+		"PARAM/ParamFiles"
+	],
+	"useDocker": false,
+	"useCcache": true,
+	"useDistcc": null,
+	"lbenvPath": "/cvmfs/lhcb.cern.ch/lib/var/lib/LbEnv/2129/stable/linux-64",
+	"projectPath": "..",
+	"contribPath": "../contrib",
+	"ccachePath": "../.ccache/$BINARY_TAG",
+	"outputPath": "../.output",
+	"localPoolDepth": null,
+	"distccHosts": [
+		{
+			"spec": "lbquantaperf01.cern.ch/30,cpp,lzo,auth",
+			"networkProbe": "lbgw.cern.ch",
+			"gateway": "lxplus.cern.ch",
+			"localPort": 36321
+		},
+		{
+			"spec": "lbquantaperf02.cern.ch/30,cpp,lzo,auth",
+			"networkProbe": "lbgw.cern.ch",
+			"gateway": "lxplus.cern.ch",
+			"localPort": 36322
+		}
+	],
+	"distccPrincipal": "distccd",
+	"distccLocalslots": null,
+	"distccLocalslotsCpp": null,
+	"distccRandomize": true,
+	"vscodeWorkspaceSettings": {}
+}

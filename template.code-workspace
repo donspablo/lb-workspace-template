@@ -1,0 +1,190 @@
+{
+    "extensions": {
+        "recommendations": [
+            "eamodio.gitlens",
+            "ms-python.python",
+            "ms-python.vscode-pylance",
+            "ms-vscode.cpptools",
+            "ms-vsliveshare.vsliveshare",
+            "twxs.cmake",
+            "lextudio.restructuredtext",
+            "trond-snekvik.simple-rst",
+            "davidanson.vscode-markdownlint",
+            "streetsidesoftware.code-spell-checker"
+        ]
+    },
+    "folders": [
+        {
+            "path": "utils"
+        }
+    ],
+    "settings": {
+        "C_Cpp.clang_format_fallbackStyle": "none",
+        "C_Cpp.clang_format_path": "/cvmfs/lhcb.cern.ch/lib/bin/x86_64-centos7/lcg-clang-format-8.0.0",
+        "C_Cpp.clang_format_style": "file",
+        "C_Cpp.configurationWarnings": "Disabled",
+        "C_Cpp.default.browse.path": [],
+        "C_Cpp.default.cStandard": "c11",
+        // fix nagging "to auto-configure IntelliSense for the ... folder" in non-cpp folders
+        "C_Cpp.default.configurationProvider": "nonexistent.extension",
+        // compileCommands/compilerPath is set per folder (.vscode/c_cpp_properties.json)
+        "C_Cpp.default.compileCommands": "",
+        "C_Cpp.default.compilerPath": "",
+        "C_Cpp.default.cppStandard": "c++17",
+        "C_Cpp.default.defines": [],
+        // includePath is set per folder
+        "C_Cpp.default.includePath": [],
+        "C_Cpp.default.intelliSenseMode": "$compilerType",
+        // Have a common DB per binary tag in a local directory (instead of per project and in ~/).
+        "C_Cpp.default.browse.databaseFilename": "$projectPath/.vscode-cpptools/$binaryTag/browse.VC.db",
+        "C_Cpp.files.exclude": {
+            "**/.vscode": true,
+            "**/build.*": true,
+            "**/InstallArea": true,
+            "/cvmfs": true,
+            "/usr": true
+        },
+        "C_Cpp.intelliSenseCachePath": "$projectPath/.vscode-cpptools/$binaryTag",
+        // Disable precompiled header caches (ipch). They are too big at 0.1-1 GB per file
+        // and are constantly being recreated for a sensible limit of 5 GB.
+        "C_Cpp.intelliSenseCacheSize": 0,
+        "C_Cpp.workspaceParsingPriority": "low",
+        "cSpell.customWorkspaceDictionaries": [
+            "lhcb"
+        ],
+        "cSpell.diagnosticLevel": "Hint",
+        "cSpell.dictionaryDefinitions": [
+            {
+                "name": "lhcb",
+                "path": "$utilsPath/dictionary.txt"
+            }
+        ],
+        "cSpell.enabledLanguageIds": [
+            "c",
+            "cpp",
+            "markdown",
+            "python",
+            "restructuredtext",
+            "text"
+        ],
+        "cSpell.language": "en,en-GB",
+        "cSpell.languageSettings": [
+            {
+                "languageId": "python",
+                "includeRegExpList": [
+                    "/#.*/",
+                    "/('''|\"\"\")[^\\1]+?\\1/g",
+                    "strings"
+                ]
+            },
+            {
+                "languageId": "cpp,c",
+                // Turn off compound words, because it is only checking strings.
+                "allowCompoundWords": false,
+                // Only check comments and strings
+                "includeRegExpList": [
+                    "CStyleComment",
+                    "string"
+                ],
+                // Exclude includes, because they are also strings.
+                "ignoreRegExpList": [
+                    "/#include.*/"
+                ]
+            }
+        ],
+        "cSpell.showStatus": false,
+        "files.associations": {
+            "*.C": "cpp",
+            "*.icpp": "cpp"
+        },
+        "files.trimTrailingWhitespace": true,
+        // python.envFile is set per folder (.vscode/settings.json)
+        "python.formatting.provider": "yapf",
+        "python.formatting.yapfPath": "$outputPath/yapf",
+        "python.languageServer": "Pylance",
+        "python.linting.enabled": true,
+        "python.linting.flake8Args": [
+            "--select=F,E71,E9,W1,W6"
+        ],
+        "python.linting.flake8Enabled": true,
+        "python.linting.flake8Path": "$outputPath/flake8",
+        "python.linting.pylintEnabled": false,
+        "python.pythonPath": "$pythonPath",
+        "restructuredtext.confPath": " ${workspaceFolder}/doc/conf.py",
+        "restructuredtext.languageServer.disabled": true,
+        "restructuredtext.linter.run": "off",
+        "restructuredtext.sphinxBuildPath": "$lbenvPath/bin/sphinx-build",
+        "telemetry.enableCrashReporter": false,
+        "telemetry.enableTelemetry": false,
+        "window.title": "${dirty}${activeEditorShort}${separator}${rootPath}"
+    },
+    "launch": {
+        "version": "0.2.0",
+        "configurations": [
+            {
+                "name": "Python: gaudirun.py",
+                "type": "python",
+                "request": "launch",
+                // TODO a better way to locate gaudirun.py?
+                "program": "${workspaceFolder:Gaudi}/Gaudi/scripts/gaudirun.py",
+                "args": [
+                    "-n",
+                    "${file}"
+                ],
+                // TODO CWD needs to be magically set to the qmtest directory to emulate
+                // what happens when running qmt tests.
+                "cwd": "$projectPath",
+                // ${workspaceFolderBasename} does not work in "launch" and there
+                // is no ${fileWorkspaceFolderBasename}, so work around that:
+                "envFile": "${fileWorkspaceFolder}/.env",
+                // TODO make envFile depend on $binaryTag, in which case we need to
+                // re-generate the .code-workspace every time the config has changed?
+                // OK when you use utils/config.py binaryTag ... but it won't work
+                // with manual editting.
+                "console": "integratedTerminal"
+            },
+            {
+                "name": "GDB: gaudirun.py",
+                "type": "cppdbg",
+                "request": "launch",
+                "program": "$pythonPath",
+                "args": [
+                    "${workspaceFolder:Gaudi}/Gaudi/scripts/gaudirun.py",
+                    "${file}"
+                ],
+                // TODO CWD needs to be magically set to the qmtest directory to emulate
+                // what happens when running qmt tests.
+                "cwd": "$projectPath",
+                "externalConsole": false,
+                "MIMode": "gdb",
+                "miDebuggerPath": "${fileWorkspaceFolder}/gdb",
+                "miDebuggerArgs": "-ix ${workspaceFolder:utils}/gdbinit",
+                "setupCommands": [
+                    {
+                        "description": "Enable pretty-printing for gdb",
+                        "text": "-enable-pretty-printing",
+                        "ignoreFailures": true
+                    }
+                ]
+            },
+            {
+                "name": "GDB: attach",
+                "type": "cppdbg",
+                "request": "attach",
+                "program": "$pythonPath",
+                "processId": "${command:pickProcess}",
+                "MIMode": "gdb",
+                // When attaching, we can make do with any gdb (but we still
+                // need some minimal environment).
+                "miDebuggerPath": "${workspaceFolder:Gaudi}/gdb",
+                "setupCommands": [
+                    {
+                        "description": "Enable pretty-printing for gdb",
+                        "text": "-enable-pretty-printing",
+                        "ignoreFailures": true
+                    }
+                ]
+            }
+        ]
+    }
+}
